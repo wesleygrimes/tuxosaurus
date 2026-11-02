@@ -145,6 +145,9 @@ reboots. The state directory stores the server identity and Tailscale credential
 [Development](docs/development.md) covers the build environment and tests.
 [Protocol](docs/protocol.md) describes the control and terminal streams.
 [Configuration](docs/configuration.md) covers Lua, host records and block plugins.
+[rexctl](docs/client.md) is a command-line client for scripts and bots. It
+uses only methods the Rex server on a Mac also provides, but has only been
+tested against Tuxosaurus.
 
 ## License
 
