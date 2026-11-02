@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,14 +43,15 @@ func parseStart(a *app, args []string) (startArgs, error) {
 	if s.slug != "" && s.worktree == "" {
 		return s, usagef("start: --slug needs --worktree")
 	}
-	if !filepath.IsAbs(s.cwd) {
-		// The server resolves cwd on its own host. Relative paths are taken
-		// from rexctl's directory, which is right when both run on one host.
-		abs, err := filepath.Abs(s.cwd)
-		if err != nil {
-			return s, err
-		}
-		s.cwd = abs
+	server, err := a.server()
+	if err != nil {
+		return s, err
+	}
+	if s.cwd, err = resolveCwd(s.cwd, localServer(server)); err != nil {
+		return s, err
+	}
+	if s.worktree != "" && s.cwd == "" {
+		return s, usagef("start: --worktree needs an absolute CWD on a remote server")
 	}
 	if s.worktree != "" {
 		if strings.HasPrefix(s.worktree, "-") || strings.ContainsAny(s.worktree, " \t\n") {
@@ -61,6 +65,52 @@ func parseStart(a *app, args []string) (startArgs, error) {
 		}
 	}
 	return s, nil
+}
+
+// resolveCwd turns CWD into the path sent to the server, which uses it on
+// its own host. For a local server, ~ and relative paths are resolved here.
+// A remote server needs an absolute path, because neither server expands ~
+// and the Mac server silently falls back to the home directory for a path it
+// cannot use. Bare ~ on a remote server sends no cwd, which means its home.
+func resolveCwd(cwd string, local bool) (string, error) {
+	if filepath.IsAbs(cwd) {
+		return filepath.Clean(cwd), nil
+	}
+	if !local {
+		if cwd == "~" {
+			return "", nil
+		}
+		return "", usagef("start: CWD %q must be absolute (or ~) on a remote server", cwd)
+	}
+	if cwd == "~" || strings.HasPrefix(cwd, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, strings.TrimPrefix(cwd, "~")), nil
+	}
+	return filepath.Abs(cwd)
+}
+
+// localServer reports whether the server shares rexctl's host: a unix
+// socket or a loopback address.
+func localServer(raw string) bool {
+	if strings.HasPrefix(raw, "unix://") {
+		return true
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // worktreeScript runs as sh -c SCRIPT rexctl-worktree REPO DIR BRANCH CMD...
@@ -303,7 +353,7 @@ func cmdRead(ctx context.Context, a *app, args []string) error {
 		}
 		defer stream.Close()
 	}
-	format := "plain"
+	format := "text"
 	if r.vt {
 		format = "vt"
 	}

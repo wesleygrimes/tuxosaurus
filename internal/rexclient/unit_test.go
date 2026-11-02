@@ -132,6 +132,7 @@ func TestDeriveState(t *testing.T) {
 		{"error", Status{Program: &ProgramRecord{State: "error"}}, StateError},
 		{"shell prompt", Status{Foreground: shell, Child: shell}, StateWaiting},
 		{"login shell", Status{Foreground: &ProcessInfo{PID: 10, Name: "-zsh"}, Child: shell}, StateWaiting},
+		{"mac login shell", Status{Foreground: &ProcessInfo{PID: 11, Name: "zsh"}, Child: &ProcessInfo{PID: 10, Name: "login"}}, StateWaiting},
 		{"program running", Status{Foreground: &ProcessInfo{PID: 11, Name: "make"}, Child: shell}, StateRunning},
 		{"exec'd program", Status{Foreground: &ProcessInfo{PID: 10, Name: "claude"}, Child: &ProcessInfo{PID: 10, Name: "claude"}}, StateRunning},
 		{"nothing", Status{}, StateRunning},

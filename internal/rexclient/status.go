@@ -144,7 +144,9 @@ func deriveState(st Status) (string, string) {
 		}
 	}
 	if fg := st.Foreground; fg != nil {
-		if isShell(fg.Name) && (st.Child == nil || st.Child.PID == fg.PID) {
+		// The Mac server starts an interactive shell under login(1), so
+		// the child is login and the shell is its child.
+		if isShell(fg.Name) && (st.Child == nil || st.Child.PID == fg.PID || filepath.Base(st.Child.Name) == "login") {
 			return StateWaiting, "shell is in the foreground"
 		}
 		return StateRunning, "foreground process " + fg.Name

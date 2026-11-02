@@ -160,7 +160,7 @@ func (c *Client) checkWait(ctx context.Context, t Thread, o WaitOptions, exitCod
 	case "idle":
 		return res, st.ExitCode != nil || time.Since(lastOutput) >= o.Idle, nil
 	case "pattern":
-		screen, err := c.Format(ctx, t.Session.ID, t.Block.ID, "plain", true)
+		screen, err := c.Format(ctx, t.Session.ID, t.Block.ID, "text", true)
 		if err != nil {
 			return res, false, err
 		}

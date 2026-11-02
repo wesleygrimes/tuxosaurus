@@ -67,6 +67,32 @@ func TestParseStart(t *testing.T) {
 	}
 }
 
+func TestStartRemoteCwd(t *testing.T) {
+	remote, _, _ := testApp(map[string]string{"REX_SERVER": "https://mac-rex.example.ts.net"})
+	s, err := parseStart(remote, []string{"bot", "run", "~"})
+	if err != nil || s.cwd != "" {
+		t.Fatalf("remote ~: %q %v", s.cwd, err)
+	}
+	if s, err := parseStart(remote, []string{"bot", "run", "/Users/wes/src/"}); err != nil || s.cwd != "/Users/wes/src" {
+		t.Fatalf("remote abs: %q %v", s.cwd, err)
+	}
+	for _, bad := range [][]string{{"bot", "run", "rel"}, {"bot", "run", "~/src"}, {"bot", "run", "~", "--worktree", "wes/x"}} {
+		if _, err := parseStart(remote, bad); !errors.As(err, new(usageError)) {
+			t.Errorf("remote parseStart(%q): %v", bad, err)
+		}
+	}
+	local, _, _ := testApp(map[string]string{"REX_SERVER": "unix:///tmp/s.sock"})
+	home, _ := os.UserHomeDir()
+	if s, err := parseStart(local, []string{"bot", "run", "~/src"}); err != nil || s.cwd != filepath.Join(home, "src") {
+		t.Fatalf("local ~/src: %q %v", s.cwd, err)
+	}
+	for raw, want := range map[string]bool{"unix:///s": true, "http://127.0.0.1:51433": true, "http://localhost:1": true, "http://[::1]:2": true, "https://mac-rex.example.ts.net": false, "mac-rex": false, "http://100.1.2.3:51433": false} {
+		if got := localServer(raw); got != want {
+			t.Errorf("localServer(%q) = %v", raw, got)
+		}
+	}
+}
+
 func TestStartWorktree(t *testing.T) {
 	a, _, _ := testApp(nil)
 	s, err := parseStart(a, []string{"bot", "run", "/src/app", "--worktree", "wes/fix/login", "--", "make", "test"})

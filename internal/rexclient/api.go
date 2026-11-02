@@ -166,7 +166,7 @@ func (c *Client) Write(ctx context.Context, sid, bid string, data string) error 
 	return c.Terminal(ctx, sid, bid, "write", map[string]any{"data": data}, nil)
 }
 
-// Format returns the terminal contents. format is "plain" or "vt"; vt
+// Format returns the terminal contents. format is "text", "html" or "vt"; vt
 // output can be written to a terminal to repaint the screen.
 func (c *Client) Format(ctx context.Context, sid, bid, format string, trim bool) (string, error) {
 	args := map[string]any{"trim": trim}

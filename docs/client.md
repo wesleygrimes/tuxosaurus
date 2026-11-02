@@ -97,9 +97,16 @@ prints `session_id=...` and `block_id=...`, or a JSON object with `--json`.
   the new window does not take focus.
 - If `BOT` already has a run labelled `RUN`, `start` fails with exit 1. Stop
   the old run first.
-- `CWD` is a directory on the server host. A relative `CWD` is resolved
-  against `rexctl`'s current directory, which is only right when the client
-  and server share a host.
+- `CWD` is a directory on the server host. Neither server expands `~`, so
+  `rexctl` handles it:
+  - On a local server (a unix socket or a loopback address), `~` and
+    relative paths are resolved on this host.
+  - On a remote server, `CWD` must be absolute, or `~` for the server's home
+    directory. Anything else is a usage error, because the Mac server quietly
+    falls back to the home directory when it cannot use a path.
+  - Your shell expands an unquoted `~` on this host before `rexctl` sees
+    it. Quote it (`'~'`) or give the server's path, such as
+    `/Users/wes/src/app`, when the server is another machine.
 - `--label L` sets the window label. The default is `RUN`. The thread label
   is always `RUN`.
 - `--worktree BRANCH` runs `CMD` in a git worktree of the repository at
@@ -199,8 +206,10 @@ decided in this order:
 4. `running` otherwise.
 
 These are heuristics. A program that never reports status and does not exit
-shows as `running` even when it is waiting for input. Use
-`wait --until idle` or `wait --pattern` in that case.
+shows as `running` even when it is waiting for input. A script run as
+`sh -c '...'` shows as `waiting` while it runs, because a shell is in the
+foreground. Use `wait` (which waits for exit), `wait --until idle` or
+`wait --pattern` in those cases.
 
 ### wait
 
@@ -320,15 +329,21 @@ rexctl attach wes-bot review     # Ctrl-\ to leave it running
 
 ## Mac and Linux differences
 
-Tuxosaurus implements the Rex API, but `rexctl` has only been tested against
-Tuxosaurus. These points are unverified on the official Mac server:
+`rexctl` has been run against both servers. `start`, `send`, `key`, `read`,
+`status`, `wait`, `stop`, `ls` and `close` behave the same on each, with
+these differences:
 
-- Shell options. The Mac server's published options schema for
-  `com.superlogical.terminal.shell` lists only `cwd`. Tuxosaurus also accepts
-  `command` and `exit.on_completion`, and `start` sends both. The Mac server
-  may reject them, or ignore them and run the default shell instead of `CMD`.
-  `--close-on-exit` stops `start` from sending `exit`.
-  `start --worktree` depends on `command` too.
+- Shell options. The Mac server's published options schema lists only
+  `cwd`, but it also honors `command`: `CMD` runs as the block's child
+  process and its exit code is reported. `start --worktree` relies on this.
+- Interactive shells. With no `CMD`, the Mac server starts the shell under
+  `login`, so the child process is `login`. `status` still reports `waiting`
+  at a prompt, but the exit code after `exit N` is `login`'s, which is 0.
+  Start the program as `CMD` when its exit code matters.
+- Working directory. The Mac server does not expand `~` and falls back to
+  the home directory when `cwd` is missing or invalid. See `start`.
+- Screen format. The Mac server accepts only `text`, `html` and `vt` for
+  `terminal.format`. `rexctl` asks for `text`, which Tuxosaurus also accepts.
 - Data tickets. Tuxosaurus returns `data.connect` tickets as base64url
   strings, while the published schema describes an array of 16 bytes.
   `rexctl` accepts both.

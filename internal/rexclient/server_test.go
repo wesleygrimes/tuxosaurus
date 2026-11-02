@@ -63,7 +63,7 @@ func TestIntegration(t *testing.T) {
 	if err != nil || res.Match != "REX_42" {
 		t.Fatalf("wait pattern: %+v %v", res, err)
 	}
-	screen, err := c.Format(ctx, shell.Session.ID, shell.Block.ID, "plain", true)
+	screen, err := c.Format(ctx, shell.Session.ID, shell.Block.ID, "text", true)
 	if err != nil || !strings.Contains(screen, "REX_42") || !strings.Contains(screen, "/tmp") {
 		t.Fatalf("read: %q %v", screen, err)
 	}
@@ -89,7 +89,7 @@ func TestIntegration(t *testing.T) {
 	if err != nil || res.Status.ExitCode == nil || *res.Status.ExitCode != 3 || res.Status.State != rexclient.StateExited {
 		t.Fatalf("wait exit: %+v %v", res, err)
 	}
-	if screen, _ := c.Format(ctx, job.Session.ID, job.Block.ID, "plain", true); !strings.Contains(screen, "JOB_OUTPUT") {
+	if screen, _ := c.Format(ctx, job.Session.ID, job.Block.ID, "text", true); !strings.Contains(screen, "JOB_OUTPUT") {
 		t.Fatalf("output after exit: %q", screen)
 	}
 	if st, err := c.Status(ctx, job); err != nil || st.State != rexclient.StateExited || *st.ExitCode != 3 {
