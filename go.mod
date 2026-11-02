@@ -8,6 +8,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	go.mitchellh.com/libghostty v0.0.0-20261007030428-8812ad0e0f79
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 	tailscale.com v1.102.3
 )
 
@@ -48,7 +49,6 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
