@@ -74,6 +74,10 @@ func TestParseWait(t *testing.T) {
 	if err != nil || w.opts.For != "pattern" || w.opts.Pattern == nil || w.thread != "t1" || a.g.timeout != 90*time.Second || !a.g.timeoutSet {
 		t.Fatalf("%+v %v", w, err)
 	}
+	w, err = parseWait(a, []string{"t1", "--pattern", `^42$`})
+	if err != nil || !w.opts.Pattern.MatchString(">>> print(6*7)\n42\n>>> ") {
+		t.Fatalf("pattern should match per line: %+v %v", w, err)
+	}
 	w, err = parseWait(a, []string{"--for", "idle", "--idle", "2.5", "t1"})
 	if err != nil || w.opts.For != "idle" || w.opts.Idle != 2500*time.Millisecond {
 		t.Fatalf("%+v %v", w, err)

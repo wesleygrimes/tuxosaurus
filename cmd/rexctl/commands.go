@@ -437,7 +437,7 @@ func parseWait(a *app, args []string) (waitArgs, error) {
 	fs := newFlags("wait", &a.g)
 	addSessionFlag(fs, &w.session)
 	fs.StringVar(&w.opts.For, "for", "", "condition: exit, done, idle or pattern (default done, or pattern with --pattern)")
-	fs.StringVar(&pattern, "pattern", "", "regular expression to find in the plain screen text")
+	fs.StringVar(&pattern, "pattern", "", "regular expression to find in the plain screen text; ^ and $ match at line ends")
 	fs.StringVar(&idle, "idle", "5", "seconds without output that count as idle")
 	fs.BoolVar(&w.exitStatus, "exit-status", false, "exit with the thread's exit code when it is known")
 	pos, err := parse(fs, args)
@@ -452,7 +452,7 @@ func parseWait(a *app, args []string) (waitArgs, error) {
 		return w, usagef("wait: --idle: %v", err)
 	}
 	if pattern != "" {
-		if w.opts.Pattern, err = regexp.Compile(pattern); err != nil {
+		if w.opts.Pattern, err = regexp.Compile("(?m)" + pattern); err != nil {
 			return w, usagef("wait: --pattern: %v", err)
 		}
 		if w.opts.For == "" {

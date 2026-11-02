@@ -190,7 +190,7 @@ exits 0 when the condition is met and 124 on timeout.
 | `done` (default) | `state` is `done`, `error` or `exited`, or the thread was removed. |
 | `exit` | The process exited, or the thread was removed. |
 | `idle` | No output for `--idle` seconds (default 5), or the process exited. |
-| `pattern` | The Go regular expression `--pattern` matches the plain screen text. `--pattern` alone implies this condition. |
+| `pattern` | The Go regular expression `--pattern` matches the plain screen text. `^` and `$` match at the start and end of each line. `--pattern` alone implies this condition. |
 
 `wait` learns of a process exit from the server's `child_exited` event, the
 exit marker on the data stream, and by polling the process method every
