@@ -51,6 +51,16 @@ func (c *Client) ListBlocks(ctx context.Context, sid string) ([]Block, error) {
 type BlockSpec struct {
 	Label   string
 	Options map[string]any
+	// WindowLabel names the window that holds the block. It defaults to
+	// Label.
+	WindowLabel string
+}
+
+func (b BlockSpec) windowLabel() string {
+	if b.WindowLabel != "" {
+		return b.WindowLabel
+	}
+	return b.Label
 }
 
 func (b BlockSpec) layout() map[string]any {
@@ -71,8 +81,8 @@ func CreateSessionRequest(label string, block *BlockSpec) map[string]any {
 	p := map[string]any{"label": label}
 	if block != nil {
 		w := map[string]any{"layout": block.layout()}
-		if block.Label != "" {
-			w["window_label"] = block.Label
+		if l := block.windowLabel(); l != "" {
+			w["window_label"] = l
 		}
 		p["initial_windows"] = []any{w}
 	}
@@ -82,8 +92,8 @@ func CreateSessionRequest(label string, block *BlockSpec) map[string]any {
 // NewWindowRequest builds a session.new_window payload for one block.
 func NewWindowRequest(sid string, block BlockSpec) map[string]any {
 	p := map[string]any{"session_id": sid, "layout": block.layout(), "focus": false}
-	if block.Label != "" {
-		p["window_label"] = block.Label
+	if l := block.windowLabel(); l != "" {
+		p["window_label"] = l
 	}
 	return p
 }
@@ -122,6 +132,20 @@ func (c *Client) NewWindow(ctx context.Context, sid string, block BlockSpec) (st
 
 func (c *Client) DestroySession(ctx context.Context, sid string) error {
 	return c.Call(ctx, "session.destroy", map[string]any{"session_id": sid}, nil)
+}
+
+// CloseWindow closes a window and every block in it.
+func (c *Client) CloseWindow(ctx context.Context, sid, wid string) error {
+	return c.Call(ctx, "session.close_window", map[string]any{"session_id": sid, "window_id": wid}, nil)
+}
+
+// WindowCount returns how many windows the session has.
+func (c *Client) WindowCount(ctx context.Context, sid string) (int, error) {
+	var out struct {
+		Windows []json.RawMessage `json:"windows"`
+	}
+	err := c.Call(ctx, "session.view", map[string]any{"session_id": sid}, &out)
+	return len(out.Windows), err
 }
 
 // CloseBlock removes a block. The server hangs up the block's process group.

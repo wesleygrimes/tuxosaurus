@@ -18,6 +18,9 @@ func TestKeyBytes(t *testing.T) {
 		"C-@": "\x00", "C-Space": "\x00", "C-?": "\x7f",
 		"M-x": "\x1bx", "M-Enter": "\x1b\r", "M-C-c": "\x1b\x03",
 		"y": "y", "é": "é",
+		"ctrl+c": "\x03", "Ctrl+C": "\x03", "ctrl-d": "\x04", "control+z": "\x1a",
+		"ctrl+space": "\x00", "alt+x": "\x1bx", "meta-enter": "\x1b\r", "option+b": "\x1bb",
+		"shift+tab": "\x1b[Z", "ESCAPE": "\x1b", "RETURN": "\r",
 	}
 	for name, want := range cases {
 		got, err := KeyBytes(name)

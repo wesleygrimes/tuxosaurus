@@ -19,7 +19,7 @@ func TestAttach(t *testing.T) {
 		t.Skip("requires -server-binary")
 	}
 	c := cli{t: t, server: rexclienttest.StartServer(t, *serverBinary)}
-	c.ok("start", "--session", "att", "--label", "sh")
+	c.ok("start", "att", "sh", "/tmp")
 
 	ptmx, tty, err := pty.Open()
 	if err != nil {
@@ -32,7 +32,7 @@ func TestAttach(t *testing.T) {
 	var errb bytes.Buffer
 	a := &app{stdin: tty, stdout: tty, stderr: &errb, getenv: env(map[string]string{"REX_SERVER": c.server})}
 	done := make(chan int, 1)
-	go func() { done <- a.main([]string{"attach", "sh"}) }()
+	go func() { done <- a.main([]string{"attach", "att", "sh"}) }()
 
 	output := make(chan string, 64)
 	go func() {
@@ -81,10 +81,10 @@ func TestAttach(t *testing.T) {
 		t.Fatalf("detach message: %q", errb.String())
 	}
 	// The resize to the pty's size took effect and the thread survived.
-	if out := c.ok("status", "sh"); !strings.Contains(out, "waiting") {
+	if out := c.ok("status", "att", "sh"); !strings.Contains(out, "waiting") {
 		t.Fatalf("thread after detach: %s", out)
 	}
-	if out := c.ok("read", "sh"); !strings.Contains(out, "ATTACHED_9") {
+	if out := c.ok("read", "att", "sh"); !strings.Contains(out, "ATTACHED_9") {
 		t.Fatalf("screen after detach: %s", out)
 	}
 }

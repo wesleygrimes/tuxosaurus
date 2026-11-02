@@ -14,50 +14,33 @@ import (
 	"github.com/wesleygrimes/tuxosaurus/internal/rexclient"
 )
 
-// defaultSession is used by start when neither --session nor --slug is given.
-const defaultSession = "rexctl"
-
 type startArgs struct {
-	session, label, cwd, worktree, slug string
-	noMise, dryRun, closeOnExit         bool
-	command                             []string
+	bot, run, cwd, label, worktree, slug string
+	noMise, dryRun, closeOnExit          bool
+	command                              []string
 }
 
 func parseStart(a *app, args []string) (startArgs, error) {
 	var s startArgs
 	fs := newFlags("start", &a.g)
-	fs.StringVar(&s.session, "session", "", "session label or ID; created if missing (default --slug, else \"rexctl\")")
-	fs.StringVar(&s.label, "label", "", "thread label (default --slug, else the command name)")
-	fs.StringVar(&s.cwd, "cwd", "", "working directory on the server host")
-	fs.StringVar(&s.worktree, "worktree", "", "run in this directory; same as --cwd")
-	fs.StringVar(&s.slug, "slug", "", "name used for both session and thread when they are not given")
+	fs.StringVar(&s.label, "label", "", "window label (default RUN)")
+	fs.StringVar(&s.worktree, "worktree", "", "git branch to run in, such as wes/fix-login; its worktree is made next to CWD if missing")
+	fs.StringVar(&s.slug, "slug", "", "worktree directory suffix (default the branch without wes/, with / as -)")
 	fs.BoolVar(&s.noMise, "no-mise", false, "accepted for compatibility; has no effect")
 	fs.BoolVar(&s.dryRun, "dry-run", false, "print the requests and exit")
-	fs.BoolVar(&s.closeOnExit, "close-on-exit", false, "let the server remove the thread when its command exits")
+	fs.BoolVar(&s.closeOnExit, "close-on-exit", false, "let the server remove the run when its command exits")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return s, err
 	}
-	s.command = pos
-	if s.cwd != "" && s.worktree != "" {
-		return s, usagef("start: use --cwd or --worktree, not both")
+	if len(pos) < 3 || pos[0] == "" || pos[1] == "" || pos[2] == "" {
+		return s, usagef("usage: rexctl %s", commands["start"].usage)
 	}
-	if s.worktree != "" {
-		s.cwd = s.worktree
+	s.bot, s.run, s.cwd, s.command = pos[0], pos[1], pos[2], pos[3:]
+	if s.slug != "" && s.worktree == "" {
+		return s, usagef("start: --slug needs --worktree")
 	}
-	if s.session == "" {
-		s.session = s.slug
-	}
-	if s.session == "" {
-		s.session = defaultSession
-	}
-	if s.label == "" {
-		s.label = s.slug
-	}
-	if s.label == "" && len(s.command) > 0 {
-		s.label = filepath.Base(s.command[0])
-	}
-	if s.cwd != "" && !filepath.IsAbs(s.cwd) {
+	if !filepath.IsAbs(s.cwd) {
 		// The server resolves cwd on its own host. Relative paths are taken
 		// from rexctl's directory, which is right when both run on one host.
 		abs, err := filepath.Abs(s.cwd)
@@ -66,7 +49,48 @@ func parseStart(a *app, args []string) (startArgs, error) {
 		}
 		s.cwd = abs
 	}
+	if s.worktree != "" {
+		if strings.HasPrefix(s.worktree, "-") || strings.ContainsAny(s.worktree, " \t\n") {
+			return s, usagef("start: bad --worktree branch %q", s.worktree)
+		}
+		if s.slug == "" {
+			s.slug = strings.ReplaceAll(strings.TrimPrefix(s.worktree, "wes/"), "/", "-")
+		}
+		if s.slug == "" || strings.Contains(s.slug, "/") || s.slug == "." || s.slug == ".." {
+			return s, usagef("start: bad --slug %q", s.slug)
+		}
+	}
 	return s, nil
+}
+
+// worktreeScript runs as sh -c SCRIPT rexctl-worktree REPO DIR BRANCH CMD...
+// It adds the worktree when DIR is missing, then runs CMD (or a shell) in it.
+const worktreeScript = `set -e
+repo=$1 dir=$2 branch=$3
+shift 3
+if [ ! -d "$dir" ]; then
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$repo" worktree add "$dir" "$branch"
+  else
+    git -C "$repo" worktree add -b "$branch" "$dir"
+  fi
+fi
+cd "$dir"
+[ $# -gt 0 ] || set -- "${SHELL:-/bin/sh}"
+exec "$@"`
+
+// worktreeDir is where start --worktree puts the worktree: a sibling of
+// CWD named CWD-SLUG.
+func worktreeDir(cwd, slug string) string {
+	return filepath.Join(filepath.Dir(cwd), filepath.Base(cwd)+"-"+slug)
+}
+
+func (s startArgs) options() rexclient.StartOptions {
+	cmd := s.command
+	if s.worktree != "" {
+		cmd = append([]string{"/bin/sh", "-c", worktreeScript, "rexctl-worktree", s.cwd, worktreeDir(s.cwd, s.slug), s.worktree}, s.command...)
+	}
+	return rexclient.StartOptions{Session: s.bot, Label: s.run, WindowLabel: s.label, Cwd: s.cwd, Command: cmd, KeepOnExit: !s.closeOnExit}
 }
 
 func cmdStart(ctx context.Context, a *app, args []string) error {
@@ -74,7 +98,7 @@ func cmdStart(ctx context.Context, a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts := rexclient.StartOptions{Session: s.session, Label: s.label, Cwd: s.cwd, Command: s.command, KeepOnExit: !s.closeOnExit}
+	opts := s.options()
 	ctx, cancel := a.withTimeout(ctx, false)
 	defer cancel()
 	c, err := a.connect(ctx)
@@ -82,14 +106,29 @@ func cmdStart(ctx context.Context, a *app, args []string) error {
 		return err
 	}
 	defer c.Close()
-	if s.dryRun {
-		sessions, err := c.ListSessions(ctx)
+	sessions, err := c.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	// RUN names one run in BOT, so refuse to start a second with that name.
+	if bot, err := rexclient.MatchSession(sessions, s.bot); err == nil {
+		threads, err := c.Threads(ctx, []rexclient.Session{bot})
 		if err != nil {
 			return err
 		}
+		for _, t := range threads {
+			if t.Block.Label == s.run {
+				return fmt.Errorf("run %q already exists in %q; stop it first", s.run, s.bot)
+			}
+		}
+	}
+	if s.dryRun {
 		plan := rexclient.StartPlan(sessions, opts)
 		if a.g.json {
 			return a.printJSON(plan)
+		}
+		if s.worktree != "" {
+			fmt.Fprintf(a.stdout, "# worktree %s on branch %s\n", worktreeDir(s.cwd, s.slug), s.worktree)
 		}
 		for _, r := range plan {
 			fmt.Fprintf(a.stdout, "%s %s\n", r.Method, mustJSON(r.Payload))
@@ -107,10 +146,12 @@ func cmdStart(ctx context.Context, a *app, args []string) error {
 	return nil
 }
 
-func addSessionFlag(fs interface {
-	StringVar(*string, string, string, string)
-}, p *string) {
-	fs.StringVar(p, "session", "", "look up THREAD only in this session")
+// botRun splits the BOT RUN positionals every thread command starts with.
+func botRun(name string, pos []string, min, max int) (bot, run string, rest []string, err error) {
+	if len(pos) < min || (max >= 0 && len(pos) > max) {
+		return "", "", nil, usagef("usage: rexctl %s", commands[name].usage)
+	}
+	return pos[0], pos[1], pos[2:], nil
 }
 
 func (a *app) findThread(ctx context.Context, sessionQuery, query string) (*rexclient.Client, rexclient.Thread, error) {
@@ -127,22 +168,21 @@ func (a *app) findThread(ctx context.Context, sessionQuery, query string) (*rexc
 }
 
 func cmdSend(ctx context.Context, a *app, args []string) error {
-	var session string
 	var enter bool
 	var enterDelay time.Duration
 	fs := newFlags("send", &a.g)
-	addSessionFlag(fs, &session)
 	fs.BoolVar(&enter, "enter", false, "press Enter after the text")
 	fs.DurationVar(&enterDelay, "enter-delay", 150*time.Millisecond, "pause before Enter so TUIs do not read it as part of a paste")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) < 2 {
-		return usagef("usage: rexctl %s", commands["send"].usage)
+	bot, run, rest, err := botRun("send", pos, 3, 3)
+	if err != nil {
+		return err
 	}
-	text := strings.Join(pos[1:], " ")
-	if len(pos) == 2 && pos[1] == "-" {
+	text := rest[0]
+	if text == "-" {
 		b, err := io.ReadAll(a.stdin)
 		if err != nil {
 			return err
@@ -151,7 +191,7 @@ func cmdSend(ctx context.Context, a *app, args []string) error {
 	}
 	ctx, cancel := a.withTimeout(ctx, false)
 	defer cancel()
-	c, t, err := a.findThread(ctx, session, pos[0])
+	c, t, err := a.findThread(ctx, bot, run)
 	if err != nil {
 		return err
 	}
@@ -175,23 +215,22 @@ func cmdSend(ctx context.Context, a *app, args []string) error {
 }
 
 func cmdKey(ctx context.Context, a *app, args []string) error {
-	var session string
 	fs := newFlags("key", &a.g)
-	addSessionFlag(fs, &session)
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) < 2 {
-		return usagef("usage: rexctl %s", commands["key"].usage)
+	bot, run, keys, err := botRun("key", pos, 3, -1)
+	if err != nil {
+		return err
 	}
-	data, err := rexclient.KeysBytes(pos[1:])
+	data, err := rexclient.KeysBytes(keys)
 	if err != nil {
 		return usageError{err.Error()}
 	}
 	ctx, cancel := a.withTimeout(ctx, false)
 	defer cancel()
-	c, t, err := a.findThread(ctx, session, pos[0])
+	c, t, err := a.findThread(ctx, bot, run)
 	if err != nil {
 		return err
 	}
@@ -200,18 +239,17 @@ func cmdKey(ctx context.Context, a *app, args []string) error {
 }
 
 type readArgs struct {
-	session    string
+	bot, run   string
 	lines      int
 	vt, follow bool
 	noTrim     bool
-	thread     string
 }
 
 func parseRead(a *app, args []string) (readArgs, error) {
 	var r readArgs
 	fs := newFlags("read", &a.g)
-	addSessionFlag(fs, &r.session)
-	fs.IntVar(&r.lines, "lines", 0, "print only the last N lines (0 for all)")
+	fs.IntVar(&r.lines, "tail", 0, "print only the last N lines (0 for all)")
+	fs.IntVar(&r.lines, "lines", 0, "same as --tail")
 	fs.BoolVar(&r.vt, "vt", false, "print with VT escape sequences (colors, cursor); raw stream with --follow")
 	fs.BoolVar(&r.follow, "follow", false, "after the screen, stream new output until interrupted, timed out, or the process exits")
 	fs.BoolVar(&r.noTrim, "no-trim", false, "keep trailing blank lines and spaces")
@@ -219,13 +257,12 @@ func parseRead(a *app, args []string) (readArgs, error) {
 	if err != nil {
 		return r, err
 	}
-	if len(pos) != 1 {
-		return r, usagef("usage: rexctl %s", commands["read"].usage)
+	if r.bot, r.run, _, err = botRun("read", pos, 2, 2); err != nil {
+		return r, err
 	}
 	if r.lines < 0 {
-		return r, usagef("read: --lines must be >= 0")
+		return r, usagef("read: --tail must be >= 0")
 	}
-	r.thread = pos[0]
 	return r, nil
 }
 
@@ -252,7 +289,7 @@ func cmdRead(ctx context.Context, a *app, args []string) error {
 	}
 	ctx, cancel := a.withTimeout(ctx, r.follow)
 	defer cancel()
-	c, t, err := a.findThread(ctx, r.session, r.thread)
+	c, t, err := a.findThread(ctx, r.bot, r.run)
 	if err != nil {
 		return err
 	}
@@ -318,83 +355,27 @@ func follow(ctx context.Context, s *rexclient.Stream, w io.Writer, raw bool) err
 }
 
 func cmdStatus(ctx context.Context, a *app, args []string) error {
-	var session string
 	fs := newFlags("status", &a.g)
-	addSessionFlag(fs, &session)
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) > 1 {
-		return usagef("usage: rexctl %s", commands["status"].usage)
+	bot, run, _, err := botRun("status", pos, 2, 2)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := a.withTimeout(ctx, false)
 	defer cancel()
-	c, err := a.connect(ctx)
+	c, t, err := a.findThread(ctx, bot, run)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	sessions, err := c.ListSessions(ctx)
+	st, err := c.Status(ctx, t)
 	if err != nil {
 		return err
 	}
-	if session != "" {
-		s, err := rexclient.MatchSession(sessions, session)
-		if err != nil {
-			return err
-		}
-		sessions = []rexclient.Session{s}
-	}
-	threads, err := c.Threads(ctx, sessions)
-	if err != nil {
-		return err
-	}
-	single := false
-	if len(pos) == 1 {
-		// A thread name wins; otherwise treat the argument as a session.
-		t, err := rexclient.MatchThread(threads, pos[0])
-		switch {
-		case err == nil:
-			threads, single = []rexclient.Thread{t}, true
-		case errors.Is(err, rexclient.ErrNotFound):
-			s, serr := rexclient.MatchSession(sessions, pos[0])
-			if serr != nil {
-				return fmt.Errorf("no thread or session %q: %w", pos[0], rexclient.ErrNotFound)
-			}
-			var in []rexclient.Thread
-			for _, t := range threads {
-				if t.Session.ID == s.ID {
-					in = append(in, t)
-				}
-			}
-			threads = in
-		default:
-			return err
-		}
-	}
-	statuses := make([]rexclient.Status, 0, len(threads))
-	for _, t := range threads {
-		if err := c.Attach(ctx, t.Session.ID); err != nil {
-			return err
-		}
-		st, err := c.Status(ctx, t)
-		if err != nil {
-			if rexclient.NotFound(err) && !single {
-				continue
-			}
-			return err
-		}
-		statuses = append(statuses, st)
-	}
-	if a.g.json {
-		if single {
-			return a.printJSON(statuses[0])
-		}
-		return a.printJSON(statuses)
-	}
-	printStatuses(a.stdout, statuses)
-	return nil
+	return a.printLine(st)
 }
 
 func printStatuses(w io.Writer, statuses []rexclient.Status) {
@@ -425,29 +406,34 @@ func dash(s string) string {
 }
 
 type waitArgs struct {
-	session    string
-	thread     string
+	bot, run   string
 	opts       rexclient.WaitOptions
 	exitStatus bool
 }
 
 func parseWait(a *app, args []string) (waitArgs, error) {
 	var w waitArgs
-	var pattern, idle string
+	var pattern, idle, limit string
 	fs := newFlags("wait", &a.g)
-	addSessionFlag(fs, &w.session)
-	fs.StringVar(&w.opts.For, "for", "", "condition: exit, done, idle or pattern (default done, or pattern with --pattern)")
+	fs.StringVar(&limit, "for", "", "give up after this long, such as 30m or 90 (seconds); same as --timeout")
+	fs.StringVar(&w.opts.For, "until", "", "condition: exit, done, idle or pattern (default exit, or pattern with --pattern)")
 	fs.StringVar(&pattern, "pattern", "", "regular expression to find in the plain screen text; ^ and $ match at line ends")
 	fs.StringVar(&idle, "idle", "5", "seconds without output that count as idle")
-	fs.BoolVar(&w.exitStatus, "exit-status", false, "exit with the thread's exit code when it is known")
+	fs.BoolVar(&w.exitStatus, "exit-status", false, "exit with the run's exit code when it is known")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return w, err
 	}
-	if len(pos) != 1 {
-		return w, usagef("usage: rexctl %s", commands["wait"].usage)
+	if w.bot, w.run, _, err = botRun("wait", pos, 2, 2); err != nil {
+		return w, err
 	}
-	w.thread = pos[0]
+	if limit != "" {
+		d, err := parseDuration(limit)
+		if err != nil {
+			return w, usagef("wait: --for takes a timeout such as 30m (use --until for the condition): %v", err)
+		}
+		a.g.timeout, a.g.timeoutSet = d, true
+	}
 	if w.opts.Idle, err = parseDuration(idle); err != nil {
 		return w, usagef("wait: --idle: %v", err)
 	}
@@ -460,18 +446,28 @@ func parseWait(a *app, args []string) (waitArgs, error) {
 		}
 	}
 	if w.opts.For == "" {
-		w.opts.For = "done"
+		w.opts.For = "exit"
 	}
 	switch w.opts.For {
 	case "exit", "done", "idle":
 	case "pattern":
 		if w.opts.Pattern == nil {
-			return w, usagef("wait: --for pattern needs --pattern")
+			return w, usagef("wait: --until pattern needs --pattern")
 		}
 	default:
-		return w, usagef("wait: unknown --for %q", w.opts.For)
+		return w, usagef("wait: unknown --until %q", w.opts.For)
 	}
 	return w, nil
+}
+
+// waitLine is the JSON line wait prints: the run's status plus what ended
+// the wait.
+type waitLine struct {
+	rexclient.Status
+	Until  string `json:"until"`
+	Met    bool   `json:"met"`
+	Closed bool   `json:"closed,omitempty"`
+	Match  string `json:"match,omitempty"`
 }
 
 func cmdWait(ctx context.Context, a *app, args []string) error {
@@ -483,23 +479,19 @@ func cmdWait(ctx context.Context, a *app, args []string) error {
 	defer cancel()
 	// Lookups get their own short deadline so a bad name fails fast.
 	lookupCtx, lookupCancel := context.WithTimeout(ctx, defaultTimeout)
-	c, t, err := a.findThread(lookupCtx, w.session, w.thread)
+	c, t, err := a.findThread(lookupCtx, w.bot, w.run)
 	lookupCancel()
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 	res, err := c.Wait(ctx, t, w.opts)
-	if err != nil && errors.Is(err, rexclient.ErrTimeout) || err == nil {
-		if a.g.json {
-			out := map[string]any{"condition": w.opts.For, "met": err == nil, "status": res.Status, "closed": res.Closed}
-			if res.Match != "" {
-				out["match"] = res.Match
-			}
-			a.printJSON(out)
-		} else if res.Status.BlockID != "" {
-			printStatuses(a.stdout, []rexclient.Status{res.Status})
+	if err == nil || errors.Is(err, rexclient.ErrTimeout) {
+		st := res.Status
+		if st.BlockID == "" {
+			st = rexclient.Status{SessionID: t.Session.ID, SessionLabel: t.Session.Label, BlockID: t.Block.ID, Label: t.Block.Label}
 		}
+		a.printLine(waitLine{Status: st, Until: w.opts.For, Met: err == nil, Closed: res.Closed, Match: res.Match})
 	}
 	if err != nil {
 		return err
@@ -511,34 +503,35 @@ func cmdWait(ctx context.Context, a *app, args []string) error {
 }
 
 func cmdStop(ctx context.Context, a *app, args []string) error {
-	var session, signal string
+	var signal string
 	var grace time.Duration
 	fs := newFlags("stop", &a.g)
-	addSessionFlag(fs, &session)
 	fs.StringVar(&signal, "signal", "", "\"int\" sends Ctrl-C and waits --grace before closing")
 	fs.DurationVar(&grace, "grace", 5*time.Second, "how long to wait after Ctrl-C")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) != 1 {
-		return usagef("usage: rexctl %s", commands["stop"].usage)
+	bot, run, _, err := botRun("stop", pos, 2, 2)
+	if err != nil {
+		return err
 	}
 	if signal != "" && signal != "int" {
 		return usagef("stop: --signal supports only \"int\"")
 	}
 	ctx, cancel := a.withTimeout(ctx, false)
 	defer cancel()
-	c, t, err := a.findThread(ctx, session, pos[0])
+	c, t, err := a.findThread(ctx, bot, run)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	if err := c.Stop(ctx, t, signal == "int", grace); err != nil {
+	res, err := c.StopWindow(ctx, t, signal == "int", grace)
+	if err != nil {
 		return err
 	}
 	if a.g.json {
-		return a.printJSON(map[string]any{"session_id": t.Session.ID, "block_id": t.Block.ID, "stopped": true})
+		return a.printJSON(map[string]any{"session_id": t.Session.ID, "block_id": t.Block.ID, "stopped": true, "window_closed": res.WindowClosed, "session_closed": res.SessionClosed})
 	}
 	return nil
 }

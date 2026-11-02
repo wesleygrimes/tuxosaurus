@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -43,50 +44,93 @@ func TestParseIntersperse(t *testing.T) {
 
 func TestParseStart(t *testing.T) {
 	a, _, _ := testApp(nil)
-	s, err := parseStart(a, []string{"--slug", "fix-login", "--worktree", "/src/wt", "--no-mise", "--", "claude", "-p", "fix it"})
+	s, err := parseStart(a, []string{"wes-bot", "fix-login", "/src/app", "--label", "Fix login", "--no-mise", "--", "claude", "-p", "fix it"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.session != "fix-login" || s.label != "fix-login" || s.cwd != "/src/wt" || !reflect.DeepEqual(s.command, []string{"claude", "-p", "fix it"}) {
+	if s.bot != "wes-bot" || s.run != "fix-login" || s.cwd != "/src/app" || s.label != "Fix login" || !s.noMise || !reflect.DeepEqual(s.command, []string{"claude", "-p", "fix it"}) {
 		t.Fatalf("%+v", s)
 	}
-	s, err = parseStart(a, []string{"--session", "proj", "--", "/usr/bin/codex", "exec", "x"})
-	if err != nil || s.session != "proj" || s.label != "codex" {
+	o := s.options()
+	if o.Session != "wes-bot" || o.Label != "fix-login" || o.WindowLabel != "Fix login" || o.Cwd != "/src/app" || !reflect.DeepEqual(o.Command, s.command) {
+		t.Fatalf("options: %+v", o)
+	}
+	s, err = parseStart(a, []string{"bot", "run", "rel"})
+	wd, _ := os.Getwd()
+	if err != nil || s.cwd != filepath.Join(wd, "rel") || len(s.command) != 0 {
+		t.Fatalf("relative cwd: %+v %v", s, err)
+	}
+	for _, bad := range [][]string{nil, {"bot"}, {"bot", "run"}, {"bot", "run", "/x", "--slug", "s"}, {"bot", "", "/x"}, {"bot", "run", "/x", "--worktree", "wes/a", "--slug", "a/b"}} {
+		if _, err := parseStart(a, bad); !errors.As(err, new(usageError)) {
+			t.Errorf("parseStart(%q): %v", bad, err)
+		}
+	}
+}
+
+func TestStartWorktree(t *testing.T) {
+	a, _, _ := testApp(nil)
+	s, err := parseStart(a, []string{"bot", "run", "/src/app", "--worktree", "wes/fix/login", "--", "make", "test"})
+	if err != nil || s.slug != "fix-login" {
 		t.Fatalf("%+v %v", s, err)
 	}
-	s, err = parseStart(a, nil)
-	if err != nil || s.session != defaultSession || s.label != "" || len(s.command) != 0 {
-		t.Fatalf("defaults: %+v %v", s, err)
+	o := s.options()
+	want := []string{"/bin/sh", "-c", worktreeScript, "rexctl-worktree", "/src/app", "/src/app-fix-login", "wes/fix/login", "make", "test"}
+	if !reflect.DeepEqual(o.Command, want) || o.Cwd != "/src/app" {
+		t.Fatalf("command %q cwd %q", o.Command, o.Cwd)
 	}
-	if _, err := parseStart(a, []string{"--cwd", "/a", "--worktree", "/b"}); !errors.As(err, new(usageError)) {
-		t.Fatalf("cwd and worktree: %v", err)
+	s, _ = parseStart(a, []string{"bot", "run", "/src/app", "--worktree", "feature", "--slug", "x"})
+	if got := s.options().Command; got[5] != "/src/app-x" || len(got) != 7 {
+		t.Fatalf("slug: %q", got)
 	}
-	s, err = parseStart(a, []string{"--cwd", "rel"})
-	wd, _ := os.Getwd()
-	if err != nil || s.cwd != filepath.Join(wd, "rel") {
-		t.Fatalf("relative cwd: %q %v", s.cwd, err)
+
+	// Run the script for real: it adds the worktree once, then reuses it.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "app")
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %q: %v\n%s", args, err, out)
+		}
+	}
+	gitRun("init", "-q", repo)
+	gitRun("-C", repo, "commit", "-q", "--allow-empty", "-m", "init")
+	argv := func() []string {
+		s, _ := parseStart(a, []string{"bot", "run", repo, "--worktree", "wes/topic", "--", "pwd"})
+		return s.options().Command
+	}()
+	for i := 0; i < 2; i++ {
+		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		if err != nil || !strings.HasSuffix(strings.TrimSpace(string(out)), "/app-topic") {
+			t.Fatalf("run %d: %v\n%s", i, err, out)
+		}
 	}
 }
 
 func TestParseWait(t *testing.T) {
 	a, _, _ := testApp(nil)
-	w, err := parseWait(a, []string{"t1", "--pattern", `\$ $`, "--timeout", "90"})
-	if err != nil || w.opts.For != "pattern" || w.opts.Pattern == nil || w.thread != "t1" || a.g.timeout != 90*time.Second || !a.g.timeoutSet {
+	w, err := parseWait(a, []string{"bot", "run", "--for", "30m"})
+	if err != nil || w.opts.For != "exit" || w.bot != "bot" || w.run != "run" || a.g.timeout != 30*time.Minute || !a.g.timeoutSet {
 		t.Fatalf("%+v %v", w, err)
 	}
-	w, err = parseWait(a, []string{"t1", "--pattern", `^42$`})
+	a, _, _ = testApp(nil)
+	w, err = parseWait(a, []string{"bot", "run", "--pattern", `\$ $`, "--timeout", "90"})
+	if err != nil || w.opts.For != "pattern" || w.opts.Pattern == nil || a.g.timeout != 90*time.Second {
+		t.Fatalf("%+v %v", w, err)
+	}
+	w, err = parseWait(a, []string{"bot", "run", "--pattern", `^42$`})
 	if err != nil || !w.opts.Pattern.MatchString(">>> print(6*7)\n42\n>>> ") {
 		t.Fatalf("pattern should match per line: %+v %v", w, err)
 	}
-	w, err = parseWait(a, []string{"--for", "idle", "--idle", "2.5", "t1"})
+	w, err = parseWait(a, []string{"--until", "idle", "--idle", "2.5", "bot", "run"})
 	if err != nil || w.opts.For != "idle" || w.opts.Idle != 2500*time.Millisecond {
 		t.Fatalf("%+v %v", w, err)
 	}
-	w, err = parseWait(a, []string{"t1"})
-	if err != nil || w.opts.For != "done" {
-		t.Fatalf("default: %+v %v", w, err)
-	}
-	for _, bad := range [][]string{{}, {"t1", "--for", "pattern"}, {"t1", "--for", "nope"}, {"t1", "--pattern", "("}, {"a", "b"}} {
+	for _, bad := range [][]string{{}, {"run"}, {"b", "r", "x"}, {"b", "r", "--for", "exit"}, {"b", "r", "--until", "pattern"}, {"b", "r", "--until", "nope"}, {"b", "r", "--pattern", "("}} {
 		if _, err := parseWait(a, bad); !errors.As(err, new(usageError)) {
 			t.Errorf("parseWait(%q): %v", bad, err)
 		}
@@ -95,22 +139,28 @@ func TestParseWait(t *testing.T) {
 
 func TestParseReadAndAttach(t *testing.T) {
 	a, _, _ := testApp(nil)
-	r, err := parseRead(a, []string{"t", "--lines", "5", "--follow", "--vt"})
-	if err != nil || r.lines != 5 || !r.follow || !r.vt || r.thread != "t" {
+	r, err := parseRead(a, []string{"b", "r", "--tail", "5", "--follow", "--vt"})
+	if err != nil || r.lines != 5 || !r.follow || !r.vt || r.bot != "b" || r.run != "r" {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if _, err := parseRead(a, []string{"t", "--lines", "-1"}); err == nil {
-		t.Fatal("negative --lines accepted")
+	if r, err := parseRead(a, []string{"b", "r", "--lines", "7"}); err != nil || r.lines != 7 {
+		t.Fatalf("--lines alias: %+v %v", r, err)
 	}
-	at, err := parseAttach(a, []string{"t"})
-	if err != nil || at.detach != 0x1c || at.resize != "take" {
+	if _, err := parseRead(a, []string{"b", "r", "--tail", "-1"}); err == nil {
+		t.Fatal("negative --tail accepted")
+	}
+	if _, err := parseRead(a, []string{"r"}); !errors.As(err, new(usageError)) {
+		t.Fatalf("read with one positional: %v", err)
+	}
+	at, err := parseAttach(a, []string{"b", "r"})
+	if err != nil || at.detach != 0x1c || at.resize != "take" || at.bot != "b" || at.run != "r" {
 		t.Fatalf("%+v %v", at, err)
 	}
-	at, err = parseAttach(a, []string{"--detach-key", "C-]", "--resize", "off", "t"})
+	at, err = parseAttach(a, []string{"--detach-key", "C-]", "--resize", "off", "b", "r"})
 	if err != nil || at.detach != 0x1d || at.resize != "off" {
 		t.Fatalf("%+v %v", at, err)
 	}
-	if _, err := parseAttach(a, []string{"--detach-key", "Up", "t"}); err == nil {
+	if _, err := parseAttach(a, []string{"--detach-key", "Up", "b", "r"}); err == nil {
 		t.Fatal("multi-byte detach key accepted")
 	}
 }
@@ -207,11 +257,15 @@ func TestMainUsage(t *testing.T) {
 		t.Fatalf("unknown: %d %q", code, errb)
 	}
 	a, _, _ = testApp(nil)
-	if code := a.main([]string{"key", "t", "NoSuchKey"}); code != exitUsage {
+	if code := a.main([]string{"key", "b", "t", "NoSuchKey"}); code != exitUsage {
 		t.Fatalf("bad key: %d", code)
 	}
 	a, _, _ = testApp(nil)
 	if code := a.main([]string{"send"}); code != exitUsage {
 		t.Fatalf("send without args: %d", code)
+	}
+	a, _, _ = testApp(nil)
+	if code := a.main([]string{"send", "b", "r", "two", "words"}); code != exitUsage {
+		t.Fatalf("send with unquoted words: %d", code)
 	}
 }

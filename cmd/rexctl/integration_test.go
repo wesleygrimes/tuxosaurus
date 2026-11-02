@@ -41,7 +41,7 @@ func TestCLIIntegration(t *testing.T) {
 	c := cli{t: t, server: rexclienttest.StartServer(t, *serverBinary)}
 
 	// dry-run sends nothing.
-	if out := c.ok("start", "--dry-run", "--slug", "demo", "--", "sh"); !strings.Contains(out, "session.create") {
+	if out := c.ok("start", "--dry-run", "demo", "sh", "/tmp", "--", "sh"); !strings.Contains(out, "session.create") {
 		t.Fatalf("dry-run: %s", out)
 	}
 	if out := c.ok("--json", "ls"); strings.TrimSpace(out) != "[]" {
@@ -53,65 +53,91 @@ func TestCLIIntegration(t *testing.T) {
 		BlockID   string `json:"block_id"`
 		Created   bool   `json:"session_created"`
 	}
-	json.Unmarshal([]byte(c.ok("start", "--json", "--session", "cli", "--label", "main", "--cwd", "/tmp")), &started)
+	json.Unmarshal([]byte(c.ok("start", "--json", "cli", "main", "/tmp", "--label", "Main shell")), &started)
 	if started.SessionID == "" || started.BlockID == "" || !started.Created {
 		t.Fatalf("start: %+v", started)
 	}
-	c.ok("send", "main", "echo", "CLI_$((2*21))", "--enter")
-	c.ok("wait", "main", "--pattern", `CLI_42`, "--timeout", "10")
-	if out := c.ok("read", "main", "--lines", "3"); !strings.Contains(out, "CLI_42") {
+	if code, _, errb := c.run("", "start", "cli", "main", "/tmp"); code != exitError || !strings.Contains(errb, "already exists") {
+		t.Fatalf("duplicate run: %d %s", code, errb)
+	}
+	c.ok("send", "cli", "main", "echo CLI_$((2*21))", "--enter")
+	c.ok("wait", "cli", "main", "--pattern", `CLI_42`, "--for", "10s")
+	if out := c.ok("read", "cli", "main", "--tail", "3"); !strings.Contains(out, "CLI_42") {
 		t.Fatalf("read: %q", out)
 	}
-	// stdin text and named keys.
-	if code, out, errb := c.run("echo FROM_STDIN\n", "send", "main", "-"); code != 0 {
+	// stdin text and named keys in both spellings.
+	if code, out, errb := c.run("echo FROM_STDIN\n", "send", "cli", "main", "-"); code != 0 {
 		t.Fatalf("send stdin: %d %s %s", code, out, errb)
 	}
-	c.ok("key", "main", "C-u", "e", "c", "h", "o", "Space", "K", "E", "Y", "S", "Enter")
-	c.ok("wait", "main", "--pattern", `(?m)^KEYS$`, "--timeout", "10")
-	if out := c.ok("read", "--json", "main"); !strings.Contains(out, "FROM_STDIN") {
+	c.ok("key", "cli", "main", "ctrl+u", "e", "c", "h", "o", "Space", "K", "E", "Y", "S", "enter")
+	c.ok("wait", "cli", "main", "--pattern", `(?m)^KEYS$`, "--for", "10")
+	if out := c.ok("read", "--json", "cli", "main"); !strings.Contains(out, "FROM_STDIN") {
 		t.Fatalf("read json: %s", out)
 	}
 
-	// A job thread: wait for exit and propagate its status.
-	c.ok("start", "--session", "cli", "--label", "job", "--", "/bin/sh", "-c", "echo JOB; exit 5")
-	code, out, _ := c.run("", "wait", "job", "--for", "exit", "--exit-status", "--timeout", "10")
-	if code != 5 || !strings.Contains(out, "exited") {
-		t.Fatalf("wait --exit-status: %d %s", code, out)
-	}
-	var st struct {
+	// A job run: wait (default: for exit) and propagate its status.
+	c.ok("start", "cli", "job", "/tmp", "--", "/bin/sh", "-c", "echo JOB; exit 5")
+	code, out, _ := c.run("", "wait", "cli", "job", "--for", "10s", "--exit-status")
+	var waited struct {
 		State    string `json:"state"`
+		Until    string `json:"until"`
+		Met      bool   `json:"met"`
 		ExitCode *int   `json:"exit_code"`
 	}
-	json.Unmarshal([]byte(c.ok("status", "--json", "job")), &st)
-	if st.State != "exited" || st.ExitCode == nil || *st.ExitCode != 5 {
-		t.Fatalf("status job: %+v", st)
+	if json.Unmarshal([]byte(out), &waited); code != 5 || strings.Count(out, "\n") != 1 || waited.State != "exited" || waited.Until != "exit" || !waited.Met {
+		t.Fatalf("wait --exit-status: %d %s", code, out)
 	}
-	var all []map[string]any
-	json.Unmarshal([]byte(c.ok("status", "--json", "cli")), &all)
-	if len(all) != 2 {
-		t.Fatalf("status session: %v", all)
+	out = c.ok("status", "cli", "job")
+	var st struct {
+		State    string `json:"state"`
+		Label    string `json:"label"`
+		ExitCode *int   `json:"exit_code"`
+	}
+	if json.Unmarshal([]byte(out), &st); strings.Count(out, "\n") != 1 || st.State != "exited" || st.Label != "job" || st.ExitCode == nil || *st.ExitCode != 5 {
+		t.Fatalf("status job: %q", out)
 	}
 
 	// Timeouts exit 124; unknown names exit 3.
-	if code, _, _ := c.run("", "wait", "main", "--pattern", "NEVER_SEEN", "--timeout", "0.3"); code != exitTimeout {
-		t.Fatalf("wait timeout exit %d", code)
+	if code, out, _ := c.run("", "wait", "cli", "main", "--pattern", "NEVER_SEEN", "--for", "0.3"); code != exitTimeout || !strings.Contains(out, `"met":false`) {
+		t.Fatalf("wait timeout exit %d %s", code, out)
 	}
-	if code, _, _ := c.run("", "send", "nosuch", "x"); code != exitNotFound {
-		t.Fatalf("missing thread exit %d", code)
+	if code, _, _ := c.run("", "send", "cli", "nosuch", "x"); code != exitNotFound {
+		t.Fatalf("missing run exit %d", code)
+	}
+	if code, _, _ := c.run("", "status", "nobot", "main"); code != exitNotFound {
+		t.Fatalf("missing bot exit %d", code)
 	}
 
 	if out := c.ok("ls", "cli"); !strings.Contains(out, "main") || !strings.Contains(out, "job") {
 		t.Fatalf("ls session: %s", out)
 	}
-	c.ok("stop", "job")
-	c.ok("stop", "--signal", "int", "--grace", "1s", "main")
+	var stopped struct {
+		WindowClosed  bool `json:"window_closed"`
+		SessionClosed bool `json:"session_closed"`
+	}
+	json.Unmarshal([]byte(c.ok("stop", "--json", "cli", "job")), &stopped)
+	if !stopped.WindowClosed || stopped.SessionClosed {
+		t.Fatalf("stop job: %+v", stopped)
+	}
 	var threads []any
 	json.Unmarshal([]byte(c.ok("ls", "--json", "cli")), &threads)
-	if len(threads) != 0 {
-		t.Fatalf("threads after stop: %v", threads)
+	if len(threads) != 1 {
+		t.Fatalf("threads after one stop: %v", threads)
 	}
-	c.ok("close", "cli")
-	if code, _, _ := c.run("", "close", "cli"); code != exitNotFound {
+	// Stopping the last run ends the session.
+	json.Unmarshal([]byte(c.ok("stop", "--json", "--signal", "int", "--grace", "1s", "cli", "main")), &stopped)
+	if !stopped.WindowClosed || !stopped.SessionClosed {
+		t.Fatalf("stop main: %+v", stopped)
+	}
+	if out := c.ok("--json", "ls"); strings.TrimSpace(out) != "[]" {
+		t.Fatalf("session left after last stop: %s", out)
+	}
+
+	// close ends a session with its runs in it.
+	c.ok("start", "cli2", "a", "/tmp")
+	c.ok("start", "cli2", "b", "/tmp")
+	c.ok("close", "cli2")
+	if code, _, _ := c.run("", "close", "cli2"); code != exitNotFound {
 		t.Fatalf("close twice exit %d", code)
 	}
 }

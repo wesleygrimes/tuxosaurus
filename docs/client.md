@@ -20,13 +20,14 @@ for other platforms.
 
 ## Terms
 
-- A session holds windows. `rexctl` identifies a session by label or ID.
-- A thread is one terminal block in a session, usually one Claude or Codex
-  task. `rexctl` identifies a thread by block label or ID.
+- `BOT` is a session: one bot's workspace. `rexctl` finds it by label or ID.
+- `RUN` is a thread: one terminal block in that session, usually one Claude
+  or Codex task. `rexctl` finds it by block label or ID. `start` gives each
+  run its own window.
+- Every thread command takes `BOT RUN` as its first two arguments.
 - Wherever an ID is accepted, a unique prefix also works. On Tuxosaurus the
   prefix may leave out `block:` or `session:`.
-- An exact ID match comes first, then an exact label, then an ID prefix. If
-  two threads in different sessions share a label, pass `--session`.
+- An exact ID match comes first, then an exact label, then an ID prefix.
 
 ## Choosing a server
 
@@ -68,77 +69,101 @@ starts with `-` but is not a flag.
 
 ## Commands
 
+| Command | Does |
+| --- | --- |
+| `start BOT RUN CWD [--label L] [--worktree wes/BRANCH [--slug S]] [--no-mise] [--dry-run] -- CMD...` | Start a run. |
+| `send BOT RUN TEXT [--enter]` | Type text. |
+| `key BOT RUN KEY...` | Press keys. |
+| `read BOT RUN [--tail N]` | Print the screen. |
+| `status BOT RUN` | Print one JSON line. |
+| `wait BOT RUN [--for 30m]` | Wait for the command to exit. |
+| `stop BOT RUN` | Close the run's window. |
+| `ls [BOT]` | List sessions, or the runs in one. |
+| `close BOT` | End the session. |
+| `attach BOT RUN` | Watch and type into a run. |
+
 ### start
 
 ```sh
-rexctl start [--session S] [--label L] [--cwd DIR | --worktree PATH] [--slug NAME] \
-  [--close-on-exit] [--no-mise] [--dry-run] [-- CMD...]
+rexctl start BOT RUN CWD [--label L] [--worktree wes/BRANCH [--slug S]] \
+  [--no-mise] [--dry-run] [--close-on-exit] [-- CMD...]
 ```
 
-`start` creates a thread running `CMD`, or the server's default shell if no
-command is given. It prints `session_id=...` and `block_id=...`, or a JSON
-object with `--json`.
+`start` opens a new window in session `BOT` with one thread labelled `RUN`,
+running `CMD` in `CWD`. Without `CMD` it runs the server's default shell. It
+prints `session_id=...` and `block_id=...`, or a JSON object with `--json`.
 
-- The session is `--session`, then `--slug`, then `rexctl`. If no session has
-  that label or ID, `start` creates one. The new session contains only the new
-  thread.
-- In an existing session, the thread opens in a new window and does not take
-  focus.
-- The thread label is `--label`, then `--slug`, then the command's base name.
-- `--cwd` is the working directory on the server host. `--worktree PATH` is
-  the same as `--cwd PATH`. Relative paths are resolved against `rexctl`'s
-  current directory, which is only right when the client and server share a
-  host.
+- If no session matches `BOT`, `start` creates one. In an existing session
+  the new window does not take focus.
+- If `BOT` already has a run labelled `RUN`, `start` fails with exit 1. Stop
+  the old run first.
+- `CWD` is a directory on the server host. A relative `CWD` is resolved
+  against `rexctl`'s current directory, which is only right when the client
+  and server share a host.
+- `--label L` sets the window label. The default is `RUN`. The thread label
+  is always `RUN`.
+- `--worktree BRANCH` runs `CMD` in a git worktree of the repository at
+  `CWD`. The worktree is the sibling directory `CWD-SLUG`. `SLUG` is
+  `--slug`, or else the branch with a leading `wes/` removed and `/` turned
+  into `-`, so `--worktree wes/fix/login` in `~/src/app` uses
+  `~/src/app-fix-login`. If the directory does not exist, the server host runs
+  `git worktree add`, which checks out `BRANCH` if it exists and otherwise
+  creates it from the repository's current `HEAD`. An existing directory is
+  reused as is. The command runs through `/bin/sh -c` on the server.
+- `--slug` without `--worktree` is a usage error.
+- `--no-mise` is accepted so existing scripts keep working. It has no
+  effect.
+- `--dry-run` connects, lists sessions, prints the requests `start` would
+  send, and exits without changing anything.
 - On Tuxosaurus the command runs through the server's login shell, so the
   user's shell profile applies, including mise if the profile activates it.
 - By default the thread is kept after its command exits, so `read` and
   `status` still work and the exit code stays available. `--close-on-exit`
   lets the server remove it instead.
-- `--no-mise` is accepted so existing scripts keep working. It has no effect.
-- `--dry-run` connects, lists sessions, prints the requests `start` would
-  send, and exits without changing anything.
 
 ### send
 
 ```sh
-rexctl send [--enter] [--enter-delay 150ms] THREAD TEXT...
-rexctl send [--enter] THREAD - < prompt.txt
+rexctl send BOT RUN TEXT [--enter] [--enter-delay 150ms]
+rexctl send BOT RUN - [--enter] < prompt.txt
 ```
 
-`send` writes text to the thread's terminal. Multiple `TEXT` arguments are
-joined with spaces. `-` reads the text from standard input.
+`send` writes `TEXT` to the run's terminal. Quote `TEXT` if it has spaces;
+extra arguments are a usage error. `-` reads the text from standard input.
 
 No Enter key is sent by default. `--enter` sends Enter after the text, as a
 separate write after `--enter-delay`. Some full-screen programs, including
 Claude Code, treat text and Enter that arrive together as a paste and insert a
-newline instead of submitting. To embed a newline as typed input, use `key`.
+newline instead of submitting.
 
 ### key
 
 ```sh
-rexctl key THREAD KEY...
+rexctl key BOT RUN KEY...
 ```
 
-`key` sends named keys in tmux style. Names are case-insensitive:
+`key` presses each named key in order. Names are case-insensitive, and both
+tmux names and `ctrl+c`-style names work:
 
 | Names | Sends |
 | --- | --- |
-| `Enter`, `Tab`, `BTab`, `Esc`, `Space`, `BSpace`/`Backspace` | The usual bytes. |
+| `Enter`/`Return`, `Tab`, `Esc`/`Escape`, `Space`, `BSpace`/`Backspace` | The usual bytes. |
+| `BTab`, `shift+tab` | Back tab (`ESC [ Z`). |
 | `Up`, `Down`, `Left`, `Right`, `Home`, `End` | Normal-mode cursor sequences (`ESC [ A`). |
 | `PageUp`/`PPage`, `PageDown`/`NPage`, `Insert`/`IC`, `Delete`/`DC`, `F1` to `F12` | xterm sequences. |
-| `C-a` to `C-z`, `C-@`, `C-[`, `C-\`, `C-]`, `C-^`, `C-_`, `C-?`, `C-Space` | Control characters, for example `C-c`, `C-d`, `C-z`, `C-l`. |
-| `M-KEY` | Escape followed by `KEY`. |
+| `C-c`, `ctrl+c`, `ctrl-c`, `control+c` (any of `a` to `z`, `@`, `[`, `\`, `]`, `^`, `_`, `?`, `Space`) | Control characters. |
+| `M-x`, `alt+x`, `alt-x`, `meta+x`, `option+x` | Escape followed by the key. |
 | any single character | That character. |
 
 ### read
 
 ```sh
-rexctl read [--lines N] [--vt] [--no-trim] [--follow] THREAD
+rexctl read BOT RUN [--tail N] [--vt] [--no-trim] [--follow]
 ```
 
 `read` prints the screen and scrollback as plain text, using the terminal
-`format` method. `--lines N` keeps the last N lines. `--vt` keeps colors and
-other escape sequences.
+`format` method. `--tail N` keeps the last N lines; `--lines N` is an alias.
+`--vt` keeps colors and other escape sequences.
 
 `--follow` prints the screen, then streams new output until you press Ctrl-C,
 the timeout passes, or the process exits. The stream is plain text with escape
@@ -150,93 +175,104 @@ twice.
 ### status
 
 ```sh
-rexctl status [--session S] [THREAD|SESSION]
+rexctl status BOT RUN
 ```
 
-`status` prints one row per thread. With a thread it prints that thread (one
-JSON object with `--json`). With a session, or with no argument, it prints
-every thread in it, or in all sessions (a JSON array).
+`status` prints one compact JSON line for the run, with or without `--json`:
+
+```json
+{"session_id":"session:...","session_label":"wes-bot","block_id":"block:...","label":"fix-login","state":"exited","reason":"child process exited","exit_code":0}
+```
 
 Fields: `state`, `reason`, `exit_code` (if the process exited), `title`,
 `pwd`, `child`, `foreground` and `program` (the newest program status record).
 
-`state` is decided in this order:
+`state` is one of `running`, `waiting`, `done`, `error` and `exited`,
+decided in this order:
 
-1. `exited`: the thread's process has exited. `exit_code` is set.
+1. `exited`: the run's process has exited. `exit_code` is set.
 2. The newest program status record. Programs report it through terminal
    escape sequences. Tuxosaurus also infers it for known tools such as
    Claude Code and Codex. `working` becomes `running`. `blocked` and `idle`
    become `waiting`. `done` becomes `done`. `error` becomes `error`.
-3. `waiting` if a shell is the foreground process (the thread is at a
-   prompt).
+3. `waiting` if a shell is the foreground process (the run is at a prompt).
 4. `running` otherwise.
 
 These are heuristics. A program that never reports status and does not exit
-will show as `running` even when it is waiting for input. Use
-`wait --for idle` or `wait --pattern` in that case.
+shows as `running` even when it is waiting for input. Use
+`wait --until idle` or `wait --pattern` in that case.
 
 ### wait
 
 ```sh
-rexctl wait [--for exit|done|idle|pattern] [--pattern RE] [--idle SECS] \
-  [--timeout DUR] [--exit-status] THREAD
+rexctl wait BOT RUN [--for 30m] [--until exit|done|idle|pattern] \
+  [--pattern RE] [--idle SECS] [--exit-status]
 ```
 
-`wait` blocks until the condition holds, then prints the final status. It
-exits 0 when the condition is met and 124 on timeout.
+`wait` blocks until the run's command exits, then prints the status as one
+JSON line with three more fields: `until` (the condition), `met`, and
+`match` for a pattern. It exits 0 when the condition is met and 124 on
+timeout, after printing the status with `"met":false`.
+
+`--for DUR` is the timeout, as `30m`, `90s` or plain seconds. It is the same
+as the global `--timeout`. Without either, `wait` waits indefinitely.
+
+`--until` picks another condition:
 
 | Condition | Met when |
 | --- | --- |
-| `done` (default) | `state` is `done`, `error` or `exited`, or the thread was removed. |
-| `exit` | The process exited, or the thread was removed. |
+| `exit` (default) | The process exited, or the run was removed. |
+| `done` | `state` is `done`, `error` or `exited`, or the run was removed. |
 | `idle` | No output for `--idle` seconds (default 5), or the process exited. |
 | `pattern` | The Go regular expression `--pattern` matches the plain screen text. `^` and `$` match at the start and end of each line. `--pattern` alone implies this condition. |
 
 `wait` learns of a process exit from the server's `child_exited` event, the
 exit marker on the data stream, and by polling the process method every
-second. If the thread was removed and none of these reported an exit code,
+second. If the run was removed and none of these reported an exit code,
 `exit_code` is absent.
 
-`--exit-status` makes `rexctl` exit with the thread's exit code, when known.
+`--exit-status` makes `rexctl` exit with the run's exit code, when known.
 
 ### stop
 
 ```sh
-rexctl stop [--signal int] [--grace 5s] THREAD
+rexctl stop BOT RUN [--signal int] [--grace 5s]
 ```
 
-`stop` closes the thread. The server hangs up the thread's process group.
-With `--signal int`, `stop` first sends Ctrl-C and waits up to `--grace` for
-the process to exit, then closes the thread.
+`stop` closes the run's window with `session.close_window`, which ends the
+process in it. If that was the session's last window, `stop` also destroys
+the session. With `--signal int`, `stop` first sends Ctrl-C and waits up to
+`--grace` for the process to exit. With `--json` it prints `window_closed`
+and `session_closed`.
 
 ### ls
 
 ```sh
-rexctl ls            # sessions, with thread counts
-rexctl ls SESSION    # threads in a session, with state
+rexctl ls        # sessions, with run counts
+rexctl ls BOT    # runs in a session, with state
 ```
 
 ### close
 
 ```sh
-rexctl close SESSION
+rexctl close BOT
 ```
 
-`close` destroys the session and every thread in it.
+`close` destroys the session and every run in it.
 
 ### attach
 
 ```sh
-rexctl attach [--detach-key KEY] [--resize take|advisory|off] THREAD
+rexctl attach BOT RUN [--detach-key KEY] [--resize take|advisory|off]
 ```
 
-`attach` puts your terminal in raw mode, repaints the thread's screen, then
+`attach` puts your terminal in raw mode, repaints the run's screen, then
 shows live output and forwards your keystrokes.
 
 - Press Ctrl-\ to detach. `--detach-key` takes any single-byte key name, such
-  as `C-]`. The thread keeps running.
+  as `C-]`. The run keeps going.
 - If the process exits, `attach` returns.
-- `--resize take` (default) resizes the thread to your terminal and follows
+- `--resize take` (default) resizes the run to your terminal and follows
   window size changes. `advisory` records your size but resizes only if no
   other client owns the size. `off` never resizes. On detach, `rexctl`
   releases its size so another client's size can apply again.
@@ -244,33 +280,32 @@ shows live output and forwards your keystrokes.
 
 ## Examples
 
-Run a one-shot Claude task in a worktree and collect the result:
+Run a one-shot Claude task in a new worktree and collect the result:
 
 ```sh
-rexctl start --slug fix-login --worktree ~/src/app-fix-login -- \
+rexctl start wes-bot fix-login ~/src/app --worktree wes/fix-login -- \
   claude -p "Fix the login redirect bug and run the tests"
-rexctl wait fix-login --for exit --timeout 30m
-rexctl read fix-login --lines 80
-rexctl stop fix-login
+rexctl wait wes-bot fix-login --for 30m
+rexctl read wes-bot fix-login --tail 80
+rexctl stop wes-bot fix-login
 ```
 
-The same with Codex, using JSON for a bot:
+The same with Codex, for a bot that checks the exit code:
 
 ```sh
-rexctl --json start --session tasks --label lint-pass --cwd ~/src/app -- \
-  codex exec "Fix all lint errors"
-rexctl --json wait lint-pass --for exit --exit-status --timeout 1h
-rexctl --json read lint-pass
+rexctl start wes-bot lint-pass ~/src/app -- codex exec "Fix all lint errors"
+rexctl wait wes-bot lint-pass --for 1h --exit-status
+rexctl --json read wes-bot lint-pass
 ```
 
 An interactive Claude session that a bot prompts and a person can join:
 
 ```sh
-rexctl start --session tasks --label review --cwd ~/src/app -- claude
-rexctl wait review --for idle --idle 3
-rexctl send review --enter "Review the diff on this branch"
-rexctl wait review --for done --timeout 20m
-rexctl attach review            # Ctrl-\ to leave it running
+rexctl start wes-bot review ~/src/app -- claude
+rexctl wait wes-bot review --until idle --idle 3
+rexctl send wes-bot review "Review the diff on this branch" --enter
+rexctl wait wes-bot review --until done --for 20m
+rexctl attach wes-bot review     # Ctrl-\ to leave it running
 ```
 
 ## Exit status
@@ -280,7 +315,7 @@ rexctl attach review            # Ctrl-\ to leave it running
 | 0 | Success. |
 | 1 | Error, including connection failures and server errors. |
 | 2 | Usage error, including an ambiguous name. |
-| 3 | Session or thread not found. |
+| 3 | Session or run not found. |
 | 124 | Timeout. |
 
 ## Mac and Linux differences
@@ -293,6 +328,7 @@ Tuxosaurus. These points are unverified on the official Mac server:
   `command` and `exit.on_completion`, and `start` sends both. The Mac server
   may reject them, or ignore them and run the default shell instead of `CMD`.
   `--close-on-exit` stops `start` from sending `exit`.
+  `start --worktree` depends on `command` too.
 - Data tickets. Tuxosaurus returns `data.connect` tickets as base64url
   strings, while the published schema describes an array of 16 bytes.
   `rexctl` accepts both.

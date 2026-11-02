@@ -10,10 +10,12 @@ import (
 
 // StartOptions describes a new thread.
 type StartOptions struct {
-	Session string   // session label or ID; created with this label if missing
-	Label   string   // block label
-	Cwd     string   // working directory on the server host
-	Command []string // program and arguments; empty starts the default shell
+	Session string // session label or ID; created with this label if missing
+	Label   string // block label
+	// WindowLabel names the new window; it defaults to Label.
+	WindowLabel string
+	Cwd         string   // working directory on the server host
+	Command     []string // program and arguments; empty starts the default shell
 	// KeepOnExit asks the server to keep the block after its process exits,
 	// so output and the exit code stay readable. Tuxosaurus implements this
 	// as the shell option exit.on_completion=false.
@@ -32,7 +34,7 @@ func (o StartOptions) BlockSpec() BlockSpec {
 	if o.KeepOnExit {
 		opts["exit"] = map[string]any{"on_completion": false}
 	}
-	return BlockSpec{Label: o.Label, Options: opts}
+	return BlockSpec{Label: o.Label, Options: opts, WindowLabel: o.WindowLabel}
 }
 
 // Request is one control request, used for --dry-run output.
@@ -119,6 +121,54 @@ type WaitResult struct {
 	Status Status `json:"status"`
 	Closed bool   `json:"closed"` // block no longer exists
 	Match  string `json:"match,omitempty"`
+}
+
+// StopResult reports what StopWindow closed.
+type StopResult struct {
+	WindowClosed  bool `json:"window_closed"`
+	SessionClosed bool `json:"session_closed"`
+}
+
+// StopWindow ends a thread by closing the window that holds it, so a run
+// started in its own window leaves nothing behind. When that was the
+// session's last window, it destroys the session too. A detached block has
+// no window and is closed on its own. With interrupt, it first sends Ctrl-C
+// and waits up to grace for the process to exit.
+func (c *Client) StopWindow(ctx context.Context, t Thread, interrupt bool, grace time.Duration) (StopResult, error) {
+	var res StopResult
+	if interrupt {
+		if err := c.Write(ctx, t.Session.ID, t.Block.ID, "\x03"); err != nil {
+			return res, err
+		}
+		wctx, cancel := context.WithTimeout(ctx, grace)
+		c.Wait(wctx, t, WaitOptions{For: "exit", Poll: 200 * time.Millisecond})
+		cancel()
+	}
+	var err error
+	if t.Block.WindowID != "" {
+		err = c.CloseWindow(ctx, t.Session.ID, t.Block.WindowID)
+		res.WindowClosed = err == nil
+	} else {
+		err = c.CloseBlock(ctx, t.Session.ID, t.Block.ID)
+	}
+	if err != nil && !NotFound(err) {
+		return res, err
+	}
+	n, err := c.WindowCount(ctx, t.Session.ID)
+	if err != nil {
+		if NotFound(err) {
+			res.SessionClosed = true
+			return res, nil
+		}
+		return res, err
+	}
+	if n == 0 {
+		if err := c.DestroySession(ctx, t.Session.ID); err != nil && !NotFound(err) {
+			return res, err
+		}
+		res.SessionClosed = true
+	}
+	return res, nil
 }
 
 // Stop ends a thread. With interrupt, it first sends Ctrl-C and waits up to

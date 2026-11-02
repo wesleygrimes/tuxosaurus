@@ -29,6 +29,9 @@ func KeyBytes(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("empty key name")
 	}
+	if alias, ok := keyAlias(name); ok {
+		return KeyBytes(alias)
+	}
 	if len(name) > 2 && (name[:2] == "M-" || name[:2] == "m-") {
 		rest, err := KeyBytes(name[2:])
 		if err != nil {
@@ -46,6 +49,24 @@ func KeyBytes(name string) (string, error) {
 		return name, nil
 	}
 	return "", fmt.Errorf("unknown key %q", name)
+}
+
+// keyAlias rewrites modifier spellings such as ctrl+c, Ctrl-C, alt+x and
+// shift+tab into the tmux forms C-c, M-x and BTab.
+func keyAlias(name string) (string, bool) {
+	lower := strings.ToLower(name)
+	if lower == "shift+tab" || lower == "shift-tab" {
+		return "BTab", true
+	}
+	for _, m := range []struct{ prefix, tmux string }{
+		{"ctrl+", "C-"}, {"ctrl-", "C-"}, {"control+", "C-"}, {"control-", "C-"},
+		{"alt+", "M-"}, {"alt-", "M-"}, {"meta+", "M-"}, {"meta-", "M-"}, {"option+", "M-"},
+	} {
+		if len(lower) > len(m.prefix) && strings.HasPrefix(lower, m.prefix) {
+			return m.tmux + name[len(m.prefix):], true
+		}
+	}
+	return "", false
 }
 
 func controlKey(rest string) (string, error) {

@@ -20,27 +20,24 @@ import (
 const detachReset = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1049l\x1b[?25h\x1b[0m"
 
 type attachArgs struct {
-	session string
-	thread  string
-	detach  byte
-	resize  string
+	bot, run string
+	detach   byte
+	resize   string
 }
 
 func parseAttach(a *app, args []string) (attachArgs, error) {
 	var at attachArgs
 	var detachKey string
 	fs := newFlags("attach", &a.g)
-	addSessionFlag(fs, &at.session)
 	fs.StringVar(&detachKey, "detach-key", `C-\`, "key that detaches, as a single-byte key name")
 	fs.StringVar(&at.resize, "resize", "take", "terminal size policy: take (resize to this window), advisory (resize only if no one else owns the size), off")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return at, err
 	}
-	if len(pos) != 1 {
-		return at, usagef("usage: rexctl %s", commands["attach"].usage)
+	if at.bot, at.run, _, err = botRun("attach", pos, 2, 2); err != nil {
+		return at, err
 	}
-	at.thread = pos[0]
 	key, err := rexclient.KeyBytes(detachKey)
 	if err != nil || len(key) != 1 {
 		return at, usagef("attach: --detach-key must be a single-byte key such as C-\\ or C-]")
@@ -67,7 +64,7 @@ func cmdAttach(ctx context.Context, a *app, args []string) error {
 	ctx, cancel := a.withTimeout(ctx, true)
 	defer cancel()
 	lookupCtx, lookupCancel := context.WithTimeout(ctx, defaultTimeout)
-	c, t, err := a.findThread(lookupCtx, at.session, at.thread)
+	c, t, err := a.findThread(lookupCtx, at.bot, at.run)
 	lookupCancel()
 	if err != nil {
 		return err

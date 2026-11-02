@@ -57,16 +57,16 @@ func init() { commands = commandTable() }
 
 func commandTable() map[string]command {
 	return map[string]command{
-		"start":  {run: cmdStart, usage: "start [--session S] [--label L] [--cwd DIR | --worktree PATH] [--slug NAME] [--close-on-exit] [--dry-run] [-- CMD...]"},
-		"send":   {run: cmdSend, usage: "send [--session S] [--enter] THREAD TEXT... | THREAD -"},
-		"key":    {run: cmdKey, usage: "key [--session S] THREAD KEY..."},
-		"read":   {run: cmdRead, usage: "read [--session S] [--lines N] [--vt] [--follow] THREAD", streaming: true},
-		"status": {run: cmdStatus, usage: "status [--session S] [THREAD|SESSION]"},
-		"wait":   {run: cmdWait, usage: "wait [--session S] [--for exit|done|idle|pattern] [--pattern RE] [--idle SECS] [--timeout SECS] [--exit-status] THREAD", streaming: true},
-		"stop":   {run: cmdStop, usage: "stop [--session S] [--signal int] [--grace DUR] THREAD"},
-		"ls":     {run: cmdLs, usage: "ls [SESSION]"},
-		"close":  {run: cmdClose, usage: "close SESSION"},
-		"attach": {run: cmdAttach, usage: "attach [--session S] [--detach-key KEY] [--resize take|advisory|off] THREAD", streaming: true},
+		"start":  {run: cmdStart, usage: "start BOT RUN CWD [--label L] [--worktree wes/BRANCH [--slug S]] [--no-mise] [--dry-run] [--close-on-exit] [-- CMD...]"},
+		"send":   {run: cmdSend, usage: "send BOT RUN TEXT [--enter] [--enter-delay DUR]   (TEXT - reads stdin)"},
+		"key":    {run: cmdKey, usage: "key BOT RUN KEY...   (Enter, C-c, ctrl+c, escape, alt+x, shift+tab, ...)"},
+		"read":   {run: cmdRead, usage: "read BOT RUN [--tail N] [--vt] [--follow] [--no-trim]", streaming: true},
+		"status": {run: cmdStatus, usage: "status BOT RUN"},
+		"wait":   {run: cmdWait, usage: "wait BOT RUN [--for DUR] [--until exit|done|idle|pattern] [--pattern RE] [--idle SECS] [--exit-status]", streaming: true},
+		"stop":   {run: cmdStop, usage: "stop BOT RUN [--signal int] [--grace DUR]"},
+		"ls":     {run: cmdLs, usage: "ls [BOT]"},
+		"close":  {run: cmdClose, usage: "close BOT"},
+		"attach": {run: cmdAttach, usage: "attach BOT RUN [--detach-key KEY] [--resize take|advisory|off]", streaming: true},
 	}
 }
 
@@ -180,6 +180,11 @@ func mustJSON(v any) string {
 		return fmt.Sprint(v)
 	}
 	return string(b)
+}
+
+// printLine prints v as one compact JSON line.
+func (a *app) printLine(v any) error {
+	return json.NewEncoder(a.stdout).Encode(v)
 }
 
 func (a *app) printJSON(v any) error {
